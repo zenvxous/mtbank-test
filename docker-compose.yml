@@ -1,0 +1,37 @@
+services:
+  openwebui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: mtbank-openwebui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    environment:
+      - ENABLE_PIPELINES=true
+    volumes:
+      - openwebui_data:/app/backend/data
+    depends_on:
+      - pipelines
+    networks:
+      - mtbank
+
+  pipelines:
+    image: ghcr.io/open-webui/pipelines:main
+    container_name: mtbank-pipelines
+    restart: unless-stopped
+    ports:
+      - "9099:9099"
+    environment:
+      - PIPELINES_API_KEY=${PIPELINES_API_KEY}
+    volumes:
+      - ./pipelines:/app/pipelines
+      - pipelines_data:/app/pipelines_data
+    networks:
+      - mtbank
+
+volumes:
+  openwebui_data:
+  pipelines_data:
+
+networks:
+  mtbank:
+    driver: bridge
