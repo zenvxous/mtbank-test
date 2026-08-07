@@ -5,7 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "av>=14.0.0",
     "fastapi>=0.141.1",
+    "faster-whisper>=1.2.1",
+    "pyannote-audio>=3.4.0",
+    "pydantic-settings>=2.13.0",
+    "python-multipart>=0.0.32",
     "requests>=2.34.2",
     "uvicorn>=0.52.1",
 ]
@@ -13,7 +18,7 @@ dependencies = [
 [tool.ruff]
 line-length = 127
 indent-width = 4
-include = ["app"]
+include = ["api/**/*.py", "asr/**/*.py", "core/**/*.py", "pipelines/**/*.py"]
 
 [tool.ruff.lint]
 select = [
