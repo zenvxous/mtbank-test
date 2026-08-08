@@ -15,6 +15,9 @@ class Settings(BaseSettings):
 
     MAX_UPLOAD_BYTES: int = 100 * 1024 * 1024
 
+    OPENROUTER_API_KEY: str | None = None
+    OPENROUTER_MODEL: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

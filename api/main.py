@@ -8,6 +8,7 @@ import av.error
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
+from agents.graph import run_analysis
 from api.config import settings
 from asr.diarizer import AudioDiarizer
 from asr.transcriber import AudioTranscriber
@@ -29,8 +30,43 @@ class TranscriptSegment(BaseModel):
     text: str
 
 
+class Classification(BaseModel):
+    topic: str
+    priority: str
+
+
+class QualityChecklist(BaseModel):
+    greeting: bool
+    need_detection: bool
+    solution_provided: bool
+    farewell: bool
+
+
+class QualityScore(BaseModel):
+    total: int
+    checklist: QualityChecklist
+    comment: str
+
+
+class ComplianceIssue(BaseModel):
+    rule: str
+    severity: str
+    quote: str
+    comment: str
+
+
+class Compliance(BaseModel):
+    passed: bool
+    issues: list[ComplianceIssue]
+
+
 class AnalyzeResponse(BaseModel):
     transcript: list[TranscriptSegment]
+    classification: Classification
+    quality_score: QualityScore
+    compliance: Compliance
+    summary: str
+    action_items: list[str]
 
 
 @asynccontextmanager
@@ -64,7 +100,7 @@ def health(request: Request) -> dict:
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-def analyze_audio(request: Request, file: UploadFile = File(...)) -> AnalyzeResponse:
+def analyze_audio(request: Request, file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
@@ -94,9 +130,11 @@ def analyze_audio(request: Request, file: UploadFile = File(...)) -> AnalyzeResp
     finally:
         os.unlink(wav_path)
 
-    return AnalyzeResponse(
-        transcript=[segment.as_dict() for segment in transcript.segments],
-    )
+    dialog = [segment.as_dict() for segment in transcript.segments]
+
+    final_analysis = run_analysis(dialog)
+
+    return final_analysis
 
 def _format_audio(file_path: str) -> str:
     out_fd, out_path = tempfile.mkstemp(suffix=".wav")
