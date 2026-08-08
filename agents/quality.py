@@ -1,13 +1,14 @@
-import logging
+import time
 from typing import cast
 
+import structlog
 from fastapi import HTTPException
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 QUALITY_MAX_TOKENS = 3000
 
@@ -112,7 +113,7 @@ farewell — прощание:
 def quality_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
-        logger.warning("Quality agent: пустой транскрипт, возвращаю нулевую оценку")
+        log.warning("agent_skipped", agent="quality", reason="empty_transcript")
         return {
             "quality_score": {
                 "total": 0,
@@ -135,7 +136,8 @@ def quality_node(state: AnalyzeState) -> dict:
         ]
     )
 
-    logger.info("Quality agent: старт, сегментов=%d", len(dialog))
+    log.info("agent_started", agent="quality", segments=len(dialog))
+    started = time.perf_counter()
 
     try:
         llm = get_llm(max_completion_tokens=QUALITY_MAX_TOKENS)
@@ -149,8 +151,21 @@ def quality_node(state: AnalyzeState) -> dict:
             "checklist": result.checklist.model_dump(),
             "comment": result.comment,
         }
-        logger.info("Quality agent: результат %s", quality_score)
+        log.info(
+            "agent_completed",
+            agent="quality",
+            total=result.total,
+            checklist=quality_score["checklist"],
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
 
         return {"quality_score": quality_score}
     except Exception as e:
+        log.error(
+            "agent_failed",
+            agent="quality",
+            segments=len(dialog),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            exc_info=True,
+        )
         raise HTTPException(status_code=422, detail=f"Failed to evaluate dialog quality: {e}") from e

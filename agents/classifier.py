@@ -1,14 +1,15 @@
-import logging
+import time
 from enum import StrEnum
 from typing import cast
 
+import structlog
 from fastapi import HTTPException
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class Topic(StrEnum):
@@ -142,7 +143,7 @@ low:
 def classification_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
-        logger.warning("Classifier agent: пустой транскрипт, возвращаю значения по умолчанию")
+        log.warning("agent_skipped", agent="classifier", reason="empty_transcript")
         return {"classification": {"topic": Topic.OTHER, "priority": Priority.LOW}}
 
     prompt = ChatPromptTemplate.from_messages(
@@ -152,7 +153,8 @@ def classification_node(state: AnalyzeState) -> dict:
         ]
     )
 
-    logger.info("Classifier agent: старт, сегментов=%d", len(dialog))
+    log.info("agent_started", agent="classifier", segments=len(dialog))
+    started = time.perf_counter()
 
     try:
         llm = get_llm()
@@ -160,8 +162,21 @@ def classification_node(state: AnalyzeState) -> dict:
 
         chain = prompt | structured_llm
         result = cast(Classification, chain.invoke({"dialog": dialog}))
-        logger.info("Classifier agent: topic=%s, priority=%s", result.topic, result.priority)
+        log.info(
+            "agent_completed",
+            agent="classifier",
+            topic=result.topic,
+            priority=result.priority,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
 
         return {"classification": {"topic": result.topic, "priority": result.priority}}
     except Exception as e:
+        log.error(
+            "agent_failed",
+            agent="classifier",
+            segments=len(dialog),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            exc_info=True,
+        )
         raise HTTPException(status_code=422, detail=f"Failed to classify dialog: {e}") from e

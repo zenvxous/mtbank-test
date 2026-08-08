@@ -1,3 +1,6 @@
+import time
+
+import structlog
 from langgraph.graph import END, START, StateGraph
 
 from agents import AnalyzeState
@@ -5,6 +8,8 @@ from agents.classifier import classification_node
 from agents.compliance import compliance_node
 from agents.quality import quality_node
 from agents.summarizer import summarization_node
+
+log = structlog.get_logger(__name__)
 
 
 def build_graph():
@@ -35,6 +40,24 @@ def run_analysis(transcript: list) -> dict:
         action_items=[],
     )
 
-    final_state = analyze_graph.invoke(initial_state)
+    log.info("analysis_graph_started", segments=len(transcript))
+    started = time.perf_counter()
+
+    try:
+        final_state = analyze_graph.invoke(initial_state)
+    except Exception:
+        log.error(
+            "analysis_graph_failed",
+            segments=len(transcript),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            exc_info=True,
+        )
+        raise
+
+    log.info(
+        "analysis_graph_completed",
+        segments=len(transcript),
+        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
 
     return final_state

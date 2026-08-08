@@ -1,14 +1,15 @@
-import logging
+import time
 from enum import StrEnum
 from typing import cast
 
+import structlog
 from fastapi import HTTPException
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 COMPLIANCE_MAX_TOKENS = 4000
 
@@ -117,7 +118,7 @@ severity=high, quote="Назовите, пожалуйста, код из SMS, �
 def compliance_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
-        logger.warning("Compliance agent: пустой транскрипт, проверка пропущена")
+        log.warning("agent_skipped", agent="compliance", reason="empty_transcript")
         return {"compliance": {"passed": True, "issues": []}}
 
     classification = state.get("classification", {})
@@ -129,7 +130,8 @@ def compliance_node(state: AnalyzeState) -> dict:
         ]
     )
 
-    logger.info("Compliance agent: старт, сегментов=%d", len(dialog))
+    log.info("agent_started", agent="compliance", segments=len(dialog))
+    started = time.perf_counter()
 
     try:
         llm = get_llm(max_completion_tokens=COMPLIANCE_MAX_TOKENS)
@@ -140,8 +142,22 @@ def compliance_node(state: AnalyzeState) -> dict:
 
         issues = [issue.model_dump() for issue in result.issues]
         compliance = {"passed": not issues, "issues": issues}
-        logger.info("Compliance agent: passed=%s, нарушений=%d", compliance["passed"], len(issues))
+        log.info(
+            "agent_completed",
+            agent="compliance",
+            passed=compliance["passed"],
+            issues=len(issues),
+            severities=sorted({issue["severity"] for issue in issues}),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
 
         return {"compliance": compliance}
     except Exception as e:
+        log.error(
+            "agent_failed",
+            agent="compliance",
+            segments=len(dialog),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            exc_info=True,
+        )
         raise HTTPException(status_code=422, detail=f"Failed to check dialog compliance: {e}") from e

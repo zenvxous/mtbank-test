@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
 
+    APP_NAME: str = "mtbank-call-analyer"
+    LOG_LEVEL: str = "INFO"
+    DEBUG: bool = False
+    APP_ENV: str = "prod"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

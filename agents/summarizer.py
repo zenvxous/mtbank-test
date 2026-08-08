@@ -1,13 +1,14 @@
-import logging
+import time
 from typing import cast
 
+import structlog
 from fastapi import HTTPException
 from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
 
-logger = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 SUMMARY_MAX_TOKENS = 4000
 
@@ -80,7 +81,7 @@ action_items: [].
 def summarization_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
-        logger.warning("Summarizer agent: пустой транскрипт, резюме не составлено")
+        log.warning("agent_skipped", agent="summarizer", reason="empty_transcript")
         return {"summary": "Транскрипт пуст, резюме составить невозможно.", "action_items": []}
 
     prompt = ChatPromptTemplate.from_messages(
@@ -95,7 +96,8 @@ def summarization_node(state: AnalyzeState) -> dict:
         ]
     )
 
-    logger.info("Summarizer agent: старт, сегментов=%d", len(dialog))
+    log.info("agent_started", agent="summarizer", segments=len(dialog))
+    started = time.perf_counter()
 
     try:
         llm = get_llm(max_completion_tokens=SUMMARY_MAX_TOKENS)
@@ -113,8 +115,21 @@ def summarization_node(state: AnalyzeState) -> dict:
                 }
             ),
         )
-        logger.info("Summarizer agent: резюме готово, action_items=%d", len(result.action_items))
+        log.info(
+            "agent_completed",
+            agent="summarizer",
+            summary_length=len(result.summary),
+            action_items=len(result.action_items),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
 
         return {"summary": result.summary, "action_items": result.action_items}
     except Exception as e:
+        log.error(
+            "agent_failed",
+            agent="summarizer",
+            segments=len(dialog),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            exc_info=True,
+        )
         raise HTTPException(status_code=422, detail=f"Failed to summarize dialog: {e}") from e
