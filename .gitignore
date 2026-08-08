@@ -224,3 +224,5 @@ valves.json
 .locks/
 models--Systran--faster-whisper-medium/
 CACHEDIR.TAG
+.vscode
+.claude
