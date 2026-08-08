@@ -1,0 +1,26 @@
+name: Integration tests
+
+# Только ручной запуск: тесты делают реальные вызовы LLM через OpenRouter.
+on:
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: pytest -m integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run integration tests
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: uv run pytest -m integration -q

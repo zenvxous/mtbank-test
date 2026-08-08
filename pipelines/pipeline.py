@@ -8,8 +8,6 @@ import requests
 from pydantic import BaseModel
 
 SUPPORTED_EXTENSIONS = {".mp3", ".wav", ".ogg"}
-# Аудиофайл можно не прикладывать, а прислать прямую ссылку на него: тогда
-# имя файла берётся из Content-Disposition, из пути URL или из Content-Type.
 CONTENT_TYPE_EXTENSIONS = {
     "audio/mpeg": ".mp3",
     "audio/mp3": ".mp3",
@@ -27,12 +25,7 @@ CONTENT_DISPOSITION_RE = re.compile(
     r"filename\*=UTF-8''(?P<encoded>[^;]+)|filename=\"(?P<quoted>[^\"]+)\"|filename=(?P<bare>[^;]+)",
     re.IGNORECASE,
 )
-# Ссылка ведёт на произвольный внешний ресурс, поэтому качаем потоком и режем
-# по размеру, чтобы не забить память сервера.
 MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024
-# Служебные задачи Open WebUI (заголовок чата, теги, поисковые запросы, follow-up)
-# уходят в ту же модель обычным /chat/completions и опознаются только по префиксу
-# промпта: metadata с типом задачи до pipeline-сервера не доезжает.
 TASK_PROMPT_PREFIX = "### Task:"
 DOWNLOAD_TIMEOUT = 30
 ANALYZE_TIMEOUT = 300
@@ -332,7 +325,6 @@ class Pipeline:
         )
 
     def _extract_urls(self, content: str) -> list[str]:
-        # Теги <file .../> сами содержат url-подобные атрибуты, поэтому вырезаем их.
         text = FILE_TAG_RE.sub(" ", content)
         return [url.rstrip(".,;:!?") for url in URL_RE.findall(text)]
 
@@ -353,7 +345,6 @@ class Pipeline:
         return filename, resp.content, content_type
 
     def _load_file_by_url(self, url: str) -> tuple[str, bytes, str] | str:
-        # Если расширение видно прямо в ссылке — отсекаем чужой формат до скачивания.
         url_ext = os.path.splitext(unquote(urlparse(url).path))[1].lower()
         if url_ext and url_ext not in SUPPORTED_EXTENSIONS:
             return self._unsupported_format_error(url_ext)
@@ -405,7 +396,6 @@ class Pipeline:
         if os.path.splitext(name)[1].lower() in SUPPORTED_EXTENSIONS:
             return name
 
-        # Ссылка без расширения (пресайн, редирект на CDN) — опираемся на Content-Type.
         content_type = headers.get("Content-Type", "").split(";")[0].strip().lower()
         ext = CONTENT_TYPE_EXTENSIONS.get(content_type)
         if ext:

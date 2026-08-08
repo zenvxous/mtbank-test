@@ -15,13 +15,37 @@ dependencies = [
     "python-multipart>=0.0.32",
     "requests>=2.34.2",
     "structlog>=26.1.0",
+    "torch>=2.13.0",
+    "torchaudio>=2.11.0",
+    "torchcodec>=0.15.0",
     "uvicorn>=0.52.1",
+]
+
+# torch/torchaudio — транзитивные зависимости pyannote-audio и faster-whisper.
+# Объявлены явно только затем, чтобы к ним применился tool.uv.sources: на Linux
+# (CI и Docker) тянем CPU-колёса вместо ~3 ГБ CUDA-сборки, сервис всё равно
+# работает на CPU (WHISPER_DEVICE=cpu). На macOS остаются обычные колёса с PyPI.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchaudio = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchcodec = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "integration: реальные вызовы LLM (OpenRouter), требуют ключа и сети",
 ]
 
 [tool.ruff]
 line-length = 127
 indent-width = 4
-include = ["agents/**/*.py", "api/**/*.py", "asr/**/*.py", "pipelines/**/*.py"]
+include = ["agents/**/*.py", "api/**/*.py", "asr/**/*.py", "pipelines/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 select = [
@@ -42,5 +66,6 @@ ignore = [
 
 [dependency-groups]
 dev = [
+    "pytest>=8.3.0",
     "ruff>=0.16.1",
 ]
