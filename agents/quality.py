@@ -10,7 +10,7 @@ from agents import AnalyzeState, get_llm
 
 log = structlog.get_logger(__name__)
 
-QUALITY_MAX_TOKENS = 3000
+QUALITY_MAX_TOKENS = 4000
 
 
 class QualityChecklist(BaseModel):

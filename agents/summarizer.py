@@ -10,7 +10,7 @@ from agents import AnalyzeState, get_llm
 
 log = structlog.get_logger(__name__)
 
-SUMMARY_MAX_TOKENS = 4000
+SUMMARY_MAX_TOKENS = 5000
 
 
 class Summary(BaseModel):
