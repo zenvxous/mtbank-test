@@ -9,7 +9,6 @@ import wave
 
 import pytest
 from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from langgraph.graph import END, START
 
 from agents.classifier import Classification, Priority, Topic
@@ -17,7 +16,6 @@ from agents.compliance import ComplianceResult
 from agents.graph import build_graph, run_analysis
 from agents.quality import QualityChecklist, QualityScore
 from agents.summarizer import Summary
-from asr.transcriber import Segment, Transcript
 
 
 @pytest.fixture
@@ -109,66 +107,6 @@ def _wav_bytes(seconds: float = 0.2, sample_rate: int = 16000) -> bytes:
         wav.setframerate(sample_rate)
         wav.writeframes(b"\x00\x00" * int(sample_rate * seconds))
     return buffer.getvalue()
-
-
-class StubTranscriber:
-    def __init__(self, segments: list[Segment]) -> None:
-        self.segments = segments
-        self.calls: list[str] = []
-
-    def transcribe(self, audio_path: str) -> Transcript:
-        self.calls.append(audio_path)
-        return Transcript(segments=list(self.segments), language="ru", duration=24.0)
-
-
-class StubDiarizer:
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error = error
-        self.calls = 0
-
-    def assign_speakers(self, segments: list[Segment], audio_file_path: str) -> None:
-        self.calls += 1
-        if self.error is not None:
-            raise self.error
-        for i, segment in enumerate(segments):
-            segment.speaker = "Оператор" if i % 2 == 0 else "Клиент"
-
-
-@pytest.fixture
-def api_client(monkeypatch, analyze_result):
-    """TestClient без реального lifespan: Whisper и pyannote не поднимаем."""
-    from api import main as api_main
-
-    transcriber = StubTranscriber(
-        [
-            Segment(start=0.0, end=4.2, text="Добрый день, МТБанк, меня зовут Анна."),
-            Segment(start=4.5, end=8.1, text="Здравствуйте, хочу узнать про кредит."),
-        ]
-    )
-    diarizer = StubDiarizer()
-
-    api_main.app.state.transcriber = transcriber
-    api_main.app.state.diarizer = diarizer
-
-    analysis_calls: list[list[dict]] = []
-
-    def _run_analysis(dialog: list[dict]) -> dict:
-        analysis_calls.append(dialog)
-        return {**analyze_result, "transcript": dialog}
-
-    monkeypatch.setattr(api_main, "run_analysis", _run_analysis)
-
-    # TestClient без контекстного менеджера не запускает lifespan — Whisper и pyannote
-    # не грузятся, работают подставленные выше стабы.
-    client = TestClient(api_main.app)
-    client.transcriber = transcriber
-    client.diarizer = diarizer
-    client.analysis_calls = analysis_calls
-
-    yield client
-
-    api_main.app.state.transcriber = None
-    api_main.app.state.diarizer = None
 
 
 class TestAnalyzeAPI:
