@@ -39,6 +39,9 @@ jobs:
           enable-cache: true
           python-version: "3.11"
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Install dependencies
         run: uv sync --locked --dev
 

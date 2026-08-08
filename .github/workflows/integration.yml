@@ -1,11 +1,9 @@
 name: Integration tests
 
-# Только ручной запуск: тесты делают реальные вызовы LLM через OpenRouter.
 on:
   workflow_dispatch:
 
 env:
-  # vars.OPENROUTER_MODEL можно не задавать — тогда берём модель по умолчанию.
   OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'qwen/qwen3-30b-a3b-instruct-2507' }}
 
 jobs:
@@ -20,10 +18,12 @@ jobs:
           enable-cache: true
           python-version: "3.11"
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Install dependencies
         run: uv sync --locked --dev
 
-      # Без ключа тесты скипаются сами и job зеленеет впустую — падаем явно.
       - name: Check credentials
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
