@@ -16,9 +16,8 @@ OpenWebUI, как JSON из REST API и как метрики на дашбор�
 
 | Что | Ссылка |
 |---|---|
-| **OpenWebUI** — чат с пайплайном | _https://…_ |
-| **REST API** — `POST /analyze`, Swagger | _https://…/docs_ |
-| **Grafana** — дашборд «MTBank — Аналитика звонков» | _https://…_ |
+| **OpenWebUI** — чат с пайплайном | [openwebui](https://mtbank.work.gd/) |
+| **Grafana** — дашборд «MTBank — Аналитика звонков» | [grafana](https://mtbank.work.gd/grafana/d/mtbank-calls/mtbank-e28094-analitika-zvonkov?orgId=1&from=now-6h&to=now&timezone=browser&refresh=30s)|
 
 <!--
 Демо-сценарий для проверяющего:
