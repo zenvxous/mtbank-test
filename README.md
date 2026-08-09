@@ -15,7 +15,9 @@
 - [Критерии оценки](#критерии-оценки)
 - [Как сдать работу](#как-сдать-работу)
 - [Тестовые данные](#тестовые-данные)
+- [Запуск](#запуск)
 - [Наша выборка и результаты ASR](#наша-выборка-и-результаты-asr)
+- [Метрики и Grafana-дашборд](#метрики-и-grafana-дашборд)
 - [FAQ](#faq)
 
 ---
@@ -265,6 +267,56 @@ edge-tts --voice ru-RU-DmitryNeural  --text "..." --write-media client.mp3     #
 
 ---
 
+## Запуск
+
+**Требования:** Docker с лимитом памяти **не меньше 6 ГБ**. `faster-whisper medium`
+в `int8` занимает ~2 ГБ RSS, плюс torch и веса pyannote. На Docker Desktop лимит
+задаётся в Settings → Resources → Memory; дефолтных 2 ГБ не хватает, контейнер
+`api` убивает OOM-киллер (`docker compose ps` покажет бесконечный рестарт,
+`docker inspect mtbank-api` — `ExitCode: 137`).
+
+```bash
+cp .env.example .env        # вписать OPENROUTER_API_KEY и OPENROUTER_MODEL
+docker compose up --build
+```
+
+Поднимаются пять сервисов в общей сети:
+
+| Сервис | Порт | Что это |
+|---|---|---|
+| `openwebui` | http://localhost:3000 | Чат. Соединение с pipelines прописано автоматически, пайплайн `Audio File Аnalysis Pipeline` сразу в списке моделей |
+| `pipelines` | http://localhost:9099 | OpenWebUI Pipelines с [`pipelines/pipeline.py`](pipelines/pipeline.py) |
+| `api` | http://localhost:8000 | FastAPI: ASR + диаризация + LangGraph-агенты, `POST /analyze` |
+| `prometheus` | http://localhost:9090 | Сбор метрик с `api:8000/metrics`, retention 15 дней |
+| `grafana` | http://localhost:3001 | Дашборд `MTBank — Аналитика звонков`, уже загружен. Открывается без логина |
+
+Проверка без UI:
+
+```bash
+curl localhost:8000/health
+curl -F file=@test_data/deposit_question.ogg localhost:8000/analyze
+```
+
+**Что важно знать про первый запуск:**
+
+- `api` качает `faster-whisper medium` (~1.5 ГБ) на старте — до нескольких минут.
+  Готовность видна по `/health` или `docker compose ps` (статус `healthy`).
+  Модель кешируется в volume `whisper_cache`, повторные запуски мгновенные.
+- Без `HF_TOKEN` (токен Hugging Face с принятой лицензией
+  `pyannote/speaker-diarization-3.1`) сервис поднимается, но диаризации нет —
+  реплики остаются без ролей Оператор/Клиент.
+- Загрузка файла **вложением** в чат требует `OPENWEBUI_API_KEY` — JWT из
+  OpenWebUI → Settings → Account. Анализ по прямой ссылке на аудио работает без него.
+- Если памяти всё же мало, стек поднимется на уменьшенной модели:
+  `WHISPER_MODEL_SIZE=tiny` и `DIARIZATION_ENABLED=false` в `.env`. Качество ASR
+  просядет, ролей Оператор/Клиент не будет, но весь контракт `/analyze`
+  отрабатывает целиком.
+- Адреса сервисов пайплайн берёт из переменных окружения, но если он уже
+  сохранял валвы через UI, файл `pipelines/pipeline/valves.json` их перекроет.
+  В git этот файл не попадает.
+
+---
+
 ## Наша выборка и результаты ASR
 
 Полное описание каждого файла — в [`test_data/README.md`](test_data/README.md).
@@ -341,9 +393,109 @@ uv run python scripts/eval_wer.py                 # таблица ниже
   5 мин»**: пятиминутная запись на этой машине займёт около трёх минут только
   на ASR. Требование выполнимо на GPU или при переходе на модель поменьше —
   на текущей конфигурации (`WHISPER_DEVICE=cpu`, `int8`) оно не достигается.
-- Роли в диаризации назначаются по индексу спикера (`SPEAKER_00 → Оператор`),
-  а не по содержанию реплик, поэтому в звонке, где первым говорит клиент, роли
-  окажутся перепутаны.
+- Роли в диаризации определяются по содержанию реплик (`asr/roles.py`):
+  оператором становится кластер с максимальным лексическим score — маркеры
+  операторского скрипта против маркеров клиента, асимметрия «вы»/«я» и средняя
+  длина реплики. Порядок появления спикеров на результат не влияет, при трёх и
+  более кластерах оператор ровно один, остальные — «Клиент». Эвристика
+  словарная: на звонке вне типового скрипта отрыв лидера может оказаться ниже
+  порога, тогда происходит откат к прежнему порядковому выбору — это видно в
+  метрике `diarization_role_assignment_total{method="fallback_order"}` и в логе
+  `role_assignment_low_confidence`.
+
+---
+
+## Метрики и Grafana-дашборд
+
+`api` отдаёт Prometheus-метрики на `GET /metrics`, Prometheus скрейпит их раз в
+15 секунд, Grafana поднимается с уже загруженным дашбордом — ни datasource, ни
+импорт JSON руками настраивать не нужно.
+
+```bash
+docker compose up --build
+open http://localhost:3001        # дашборд «MTBank — Аналитика звонков»
+open http://localhost:9090/targets  # состояние скрейпа
+```
+
+### Почему Prometheus, а не БД
+
+Требуемые бонусом метрики — количество звонков, quality_score, топ тематик —
+это агрегаты, а не журнал обращений. Считать их счётчиками в процессе дешевле,
+чем заводить ради дашборда слой персистентности: `api` остаётся stateless,
+результаты анализа по-прежнему нигде не сохраняются (это важно для записей
+разговоров с клиентами), а история метрик живёт в TSDB Prometheus.
+
+Плата за это — счётчики обнуляются при рестарте `api`. Для `rate()` и
+`increase()`, на которых построены графики во времени, обнуление счётчика
+обрабатывается корректно; накопительные плитки обзора после рестарта считают
+заново. Если понадобится история отдельных звонков (например, для агента
+трендов), правильным следующим шагом будет БД, а не расширение метрик лейблами.
+
+### Состав метрик
+
+Доменные метрики объявлены в [`api/metrics.py`](api/metrics.py) и пишутся в тех
+же точках, где уже стоят structlog-события `agent_completed`,
+`transcription_completed`, `diarization_completed`:
+
+| Метрика | Тип | Лейблы |
+|---|---|---|
+| `calls_analyzed_total` | counter | `status` = success \| error |
+| `calls_by_topic_total` | counter | `topic` (5 значений enum `Topic`) |
+| `calls_by_priority_total` | counter | `priority` |
+| `call_quality_score` | histogram | — |
+| `call_quality_checklist_passed_total` | counter | `item` — пункт чеклиста |
+| `compliance_checks_total` | counter | `result` = passed \| failed |
+| `compliance_issues_total` | counter | `severity` |
+| `call_analysis_duration_seconds` | histogram | — |
+| `asr_transcription_duration_seconds` | histogram | — |
+| `asr_audio_duration_seconds` | histogram | — |
+| `asr_realtime_factor` | histogram | — (тот же RTF, что в WER-таблице) |
+| `diarization_duration_seconds` | histogram | — |
+| `diarization_failures_total` | counter | — |
+| `agent_duration_seconds` | histogram | `agent` |
+| `agent_runs_total` | counter | `agent`, `outcome` |
+
+Все лейблы — закрытые перечисления из кода агентов, поэтому кардинальность
+ограничена по построению: имя файла, `request_id` и прочие открытые значения в
+метрики не попадают (они остаются в JSON-логах).
+
+Базовые метрики о запросах (`http_requests_total`,
+`http_request_duration_seconds`) даёт `prometheus-fastapi-instrumentator`.
+`/health` и `/metrics` из инструментирования исключены — healthcheck раз в 15
+секунд иначе перебивал бы реальный трафик на графиках.
+
+### Панели
+
+Дашборд [`monitoring/grafana/dashboards/mtbank-calls.json`](monitoring/grafana/dashboards/mtbank-calls.json)
+разбит на пять рядов:
+
+- **Обзор** — звонков обработано, средний quality_score, compliance pass rate,
+  p95 времени анализа. Порог на плитке времени выставлен на 60 секунд — это
+  требование ТЗ к отклику.
+- **Тематика и приоритет** — топ тематик, тематики во времени, распределение
+  приоритетов.
+- **Качество обслуживания** — средний балл во времени, heatmap распределения
+  оценок (видно разброс, а не только среднее), процент выполнения пунктов
+  чеклиста оператора.
+- **Compliance** — нарушения по критичности и результаты проверок во времени.
+- **Производительность** — p95 по стадиям (ASR / диаризация / полный цикл),
+  время работы каждого агента, медианный RTF, трафик API и сбои пайплайна.
+
+Цвет закреплён за сущностью, а не за местом в рейтинге: `credits` остаётся
+синим независимо от того, первая это тематика или четвёртая. Приоритеты и
+severity окрашены отдельной статусной палитрой, чтобы их нельзя было спутать с
+тематиками.
+
+### Конфигурация
+
+- `METRICS_ENABLED=false` в `.env` — метрики не собираются, `/metrics` не
+  публикуется. `/analyze` продолжает работать.
+- `GRAFANA_ADMIN_PASSWORD` — пароль пользователя `admin`. Просмотр дашборда
+  доступен анонимно (роль Viewer), правки — только после входа.
+- Дашборд загружается провижинингом из файла и им же управляется: сохранить
+  правки через UI нельзя (`allowUiUpdates: false`). Менять дашборд нужно в
+  `monitoring/grafana/dashboards/mtbank-calls.json` — Grafana перечитывает файл
+  раз в 30 секунд, перезапуск не нужен.
 
 ---
 

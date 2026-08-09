@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
+from api.metrics import observe_agent
 
 log = structlog.get_logger(__name__)
 
@@ -82,6 +83,7 @@ def summarization_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
         log.warning("agent_skipped", agent="summarizer", reason="empty_transcript")
+        observe_agent("summarizer", "skipped", 0.0)
         return {"summary": "Транскрипт пуст, резюме составить невозможно.", "action_items": []}
 
     prompt = ChatPromptTemplate.from_messages(
@@ -115,6 +117,7 @@ def summarization_node(state: AnalyzeState) -> dict:
                 }
             ),
         )
+        observe_agent("summarizer", "completed", time.perf_counter() - started)
         log.info(
             "agent_completed",
             agent="summarizer",
@@ -125,6 +128,7 @@ def summarization_node(state: AnalyzeState) -> dict:
 
         return {"summary": result.summary, "action_items": result.action_items}
     except Exception as e:
+        observe_agent("summarizer", "failed", time.perf_counter() - started)
         log.error(
             "agent_failed",
             agent="summarizer",

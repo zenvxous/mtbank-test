@@ -18,12 +18,15 @@ CACHEDIR.TAG
 
 tests/
 docs/
+scripts/
+test_data/
 README.md
 docker-compose.yml
 Dockerfile
 .dockerignore
 
 pipelines/
+monitoring/
 
 # Кеши моделей, скачанные локально (сотни МБ)
 models--*/

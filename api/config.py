@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str | None = None
     OPENROUTER_MODEL: str | None = None
 
+    METRICS_ENABLED: bool = True
+
     APP_NAME: str = "mtbank-call-analyer"
     LOG_LEVEL: str = "INFO"
     DEBUG: bool = False

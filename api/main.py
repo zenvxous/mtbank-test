@@ -7,12 +7,20 @@ import av
 import av.error
 import structlog
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 
 from agents.graph import run_analysis
 from api.config import settings
 from api.logging_config import configure_logging
 from api.logging_middleware import AccessLogMiddleware
+from api.metrics import (
+    observe_asr,
+    observe_call,
+    observe_diarization,
+    record_analysis,
+    record_diarization_failure,
+)
 from asr.diarizer import AudioDiarizer
 from asr.transcriber import AudioTranscriber
 
@@ -133,6 +141,11 @@ app = FastAPI(
 
 app.add_middleware(AccessLogMiddleware)
 
+if settings.METRICS_ENABLED:
+    # /health дёргается healthcheck'ом каждые 15 с, /metrics — самим Prometheus:
+    # без исключений они забивают графики RPS и латентности шумом.
+    Instrumentator(excluded_handlers=["/health", "/metrics"]).instrument(app).expose(app)
+
 
 @app.get("/health")
 def health(request: Request) -> dict:
@@ -160,47 +173,59 @@ def analyze_audio(request: Request, file: UploadFile = File(...)):
     log.info("analyze_started", filename=file.filename, ext=ext)
     started = time.perf_counter()
 
-    temp_file_path, size = _save_upload(file, ext)
-    log.debug("upload_saved", filename=file.filename, size_bytes=size)
-
     try:
-        wav_path = _format_audio(temp_file_path)
-    finally:
-        os.unlink(temp_file_path)
+        temp_file_path, size = _save_upload(file, ext)
+        log.debug("upload_saved", filename=file.filename, size_bytes=size)
 
-    log.debug("audio_converted", sample_rate=TARGET_SAMPLE_RATE, layout=TARGET_LAYOUT)
+        try:
+            wav_path = _format_audio(temp_file_path)
+        finally:
+            os.unlink(temp_file_path)
 
-    try:
-        transcribe_started = time.perf_counter()
-        transcript = request.app.state.transcriber.transcribe(wav_path)
-        log.info(
-            "transcription_completed",
-            segments=len(transcript.segments),
-            language=transcript.language,
-            audio_duration_s=transcript.duration,
-            duration_ms=round((time.perf_counter() - transcribe_started) * 1000, 2),
-        )
+        log.debug("audio_converted", sample_rate=TARGET_SAMPLE_RATE, layout=TARGET_LAYOUT)
 
-        diarizer = request.app.state.diarizer
-        if diarizer is not None:
-            try:
-                diarize_started = time.perf_counter()
-                diarizer.assign_speakers(transcript.segments, wav_path)
-                log.info(
-                    "diarization_completed",
-                    segments=len(transcript.segments),
-                    duration_ms=round((time.perf_counter() - diarize_started) * 1000, 2),
-                )
-            except Exception:
-                log.warning("diarization_failed", filename=file.filename, exc_info=True)
-        else:
-            log.debug("diarization_skipped", filename=file.filename)
-    finally:
-        os.unlink(wav_path)
+        try:
+            transcribe_started = time.perf_counter()
+            transcript = request.app.state.transcriber.transcribe(wav_path)
+            transcribe_elapsed = time.perf_counter() - transcribe_started
+            observe_asr(transcribe_elapsed, transcript.duration)
+            log.info(
+                "transcription_completed",
+                segments=len(transcript.segments),
+                language=transcript.language,
+                audio_duration_s=transcript.duration,
+                duration_ms=round(transcribe_elapsed * 1000, 2),
+            )
 
-    dialog = [segment.as_dict() for segment in transcript.segments]
+            diarizer = request.app.state.diarizer
+            if diarizer is not None:
+                try:
+                    diarize_started = time.perf_counter()
+                    diarizer.assign_speakers(transcript.segments, wav_path)
+                    diarize_elapsed = time.perf_counter() - diarize_started
+                    observe_diarization(diarize_elapsed)
+                    log.info(
+                        "diarization_completed",
+                        segments=len(transcript.segments),
+                        duration_ms=round(diarize_elapsed * 1000, 2),
+                    )
+                except Exception:
+                    record_diarization_failure()
+                    log.warning("diarization_failed", filename=file.filename, exc_info=True)
+            else:
+                log.debug("diarization_skipped", filename=file.filename)
+        finally:
+            os.unlink(wav_path)
 
-    final_analysis = run_analysis(dialog)
+        dialog = [segment.as_dict() for segment in transcript.segments]
+
+        final_analysis = run_analysis(dialog)
+    except BaseException:
+        observe_call("error", time.perf_counter() - started)
+        raise
+
+    record_analysis(final_analysis)
+    observe_call("success", time.perf_counter() - started)
 
     log.info(
         "analyze_completed",

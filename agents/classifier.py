@@ -8,6 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
+from api.metrics import observe_agent
 
 log = structlog.get_logger(__name__)
 
@@ -144,6 +145,7 @@ def classification_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
         log.warning("agent_skipped", agent="classifier", reason="empty_transcript")
+        observe_agent("classifier", "skipped", 0.0)
         return {"classification": {"topic": Topic.OTHER, "priority": Priority.LOW}}
 
     prompt = ChatPromptTemplate.from_messages(
@@ -162,6 +164,7 @@ def classification_node(state: AnalyzeState) -> dict:
 
         chain = prompt | structured_llm
         result = cast(Classification, chain.invoke({"dialog": dialog}))
+        observe_agent("classifier", "completed", time.perf_counter() - started)
         log.info(
             "agent_completed",
             agent="classifier",
@@ -172,6 +175,7 @@ def classification_node(state: AnalyzeState) -> dict:
 
         return {"classification": {"topic": result.topic, "priority": result.priority}}
     except Exception as e:
+        observe_agent("classifier", "failed", time.perf_counter() - started)
         log.error(
             "agent_failed",
             agent="classifier",

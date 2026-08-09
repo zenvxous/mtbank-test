@@ -8,6 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
+from api.metrics import observe_agent
 
 log = structlog.get_logger(__name__)
 
@@ -119,6 +120,7 @@ def compliance_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
         log.warning("agent_skipped", agent="compliance", reason="empty_transcript")
+        observe_agent("compliance", "skipped", 0.0)
         return {"compliance": {"passed": True, "issues": []}}
 
     classification = state.get("classification", {})
@@ -142,6 +144,7 @@ def compliance_node(state: AnalyzeState) -> dict:
 
         issues = [issue.model_dump() for issue in result.issues]
         compliance = {"passed": not issues, "issues": issues}
+        observe_agent("compliance", "completed", time.perf_counter() - started)
         log.info(
             "agent_completed",
             agent="compliance",
@@ -153,6 +156,7 @@ def compliance_node(state: AnalyzeState) -> dict:
 
         return {"compliance": compliance}
     except Exception as e:
+        observe_agent("compliance", "failed", time.perf_counter() - started)
         log.error(
             "agent_failed",
             agent="compliance",

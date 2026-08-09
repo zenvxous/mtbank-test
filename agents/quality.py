@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplat
 from pydantic import BaseModel, Field
 
 from agents import AnalyzeState, get_llm
+from api.metrics import observe_agent
 
 log = structlog.get_logger(__name__)
 
@@ -114,6 +115,7 @@ def quality_node(state: AnalyzeState) -> dict:
     dialog = state.get("transcript", [])
     if not dialog:
         log.warning("agent_skipped", agent="quality", reason="empty_transcript")
+        observe_agent("quality", "skipped", 0.0)
         return {
             "quality_score": {
                 "total": 0,
@@ -151,6 +153,7 @@ def quality_node(state: AnalyzeState) -> dict:
             "checklist": result.checklist.model_dump(),
             "comment": result.comment,
         }
+        observe_agent("quality", "completed", time.perf_counter() - started)
         log.info(
             "agent_completed",
             agent="quality",
@@ -161,6 +164,7 @@ def quality_node(state: AnalyzeState) -> dict:
 
         return {"quality_score": quality_score}
     except Exception as e:
+        observe_agent("quality", "failed", time.perf_counter() - started)
         log.error(
             "agent_failed",
             agent="quality",

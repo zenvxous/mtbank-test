@@ -11,9 +11,16 @@ from pyannote.audio.pipelines.speaker_diarization import DiarizeOutput
 from pyannote.core import Segment
 
 from api.config import settings
+from api.metrics import observe_role_assignment
+from asr.roles import assign_roles
 from asr.transcriber import UNKNOWN_SPEAKER
 
 log = structlog.get_logger(__name__)
+
+# Сегмент Whisper иногда не пересекается ни с одним turn диаризации (пауза,
+# обрезка по VAD). Подтягиваем его к ближайшему turn, если тот рядом, — иначе
+# сегмент уходит в промпты как «Неизвестно» и выпадает из оценки оператора.
+NEAREST_TURN_MAX_GAP_S = 3.0
 
 
 class AudioDiarizer:
@@ -77,13 +84,19 @@ class AudioDiarizer:
                 )
                 raise
 
+        # 1. Сопоставляем сегменты с анонимными кластерами pyannote.
+        cluster_labels: list[str | None] = []
+        recovered = 0
+
         for segment in segments:
             start_time = segment.start
             end_time = segment.end
-            speaker = UNKNOWN_SPEAKER
+            label: str | None = None
 
             if diarization:
                 max_intersection = 0.0
+                nearest_gap = float("inf")
+                nearest_label: str | None = None
                 tracks = cast(
                     Iterator[tuple[Segment, object, str]],
                     diarization.speaker_diarization.itertracks(yield_label=True),
@@ -92,24 +105,48 @@ class AudioDiarizer:
                     intersection = min(end_time, turn.end) - max(start_time, turn.start)
                     if intersection > max_intersection:
                         max_intersection = intersection
-                        speaker = spk
+                        label = spk
+                    if intersection <= 0:
+                        gap = max(turn.start - end_time, start_time - turn.end)
+                        if gap < nearest_gap:
+                            nearest_gap = gap
+                            nearest_label = spk
 
-            if speaker == "SPEAKER_00":
-                speaker = "Оператор"
-            elif speaker == "SPEAKER_01":
-                speaker = "Клиент"
+                if label is None and nearest_label is not None and nearest_gap <= NEAREST_TURN_MAX_GAP_S:
+                    label = nearest_label
+                    recovered += 1
 
-            segment.speaker = speaker
+            cluster_labels.append(label)
+
+        # 2. Решаем по содержанию реплик, какой кластер — оператор.
+        cluster_texts: dict[str, list[str]] = {}
+        for segment, label in zip(segments, cluster_labels, strict=True):
+            if label is not None:
+                cluster_texts.setdefault(label, []).append(segment.text)
+
+        assignment = assign_roles(cluster_texts)
+
+        # 3. Раскладываем роли по сегментам. Сырые метки SPEAKER_NN наружу
+        # не выходят: у сегмента может быть только роль либо UNKNOWN_SPEAKER.
+        for segment, label in zip(segments, cluster_labels, strict=True):
+            segment.speaker = assignment.mapping.get(label, UNKNOWN_SPEAKER) if label else UNKNOWN_SPEAKER
 
         speaker_counts: dict[str, int] = {}
         for segment in segments:
             speaker_counts[segment.speaker] = speaker_counts.get(segment.speaker, 0) + 1
 
+        unknown_segments = speaker_counts.get(UNKNOWN_SPEAKER, 0)
+        observe_role_assignment(assignment.method, assignment.margin, unknown_segments)
+
         log.info(
             "diarization_finished",
             segments=len(segments),
             speakers=speaker_counts,
-            unknown_segments=speaker_counts.get(UNKNOWN_SPEAKER, 0),
+            unknown_segments=unknown_segments,
+            recovered_segments=recovered,
+            method=assignment.method,
+            margin=assignment.margin,
+            cluster_scores=assignment.scores,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
         )
 
